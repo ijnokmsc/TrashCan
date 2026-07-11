@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- 必须与插件项目（Dalamud.NET.Sdk 推导出的 net10.0-windows7.0）TFM 兼容，才能 ProjectReference -->
+    <TargetFramework>net10.0-windows7.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- DiscardExecutor 内含 unsafe 原生调用，测试项目需允许 unsafe 才能引用插件程序集 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- 关闭与 Dalamud/Windows 专属 API 相关的噪声告警 -->
+    <NoWarn>$(NoWarn);CA1416;CS1591;CS8632;CS0067</NoWarn>
+    <!-- 继承插件的 Dalamud 程序集搜索路径，确保 FFXIVClientStructs / Dalamud 等
+         在本项目编译、以及 dotnet test 运行时可被解析 -->
+    <DalamudLibPath>$(appdata)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
+    <AssemblySearchPaths>$(AssemblySearchPaths);$(DalamudLibPath)</AssemblySearchPaths>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 通过 ProjectReference 引用插件项目，复用其编译产物 -->
+    <ProjectReference Include="..\auto_trash_can.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Dalamud SDK 以原始 Reference + HintPath 方式引用这些程序集，不会随 ProjectReference 传递；
+         此处显式引用，供测试代码编译期解析 FFXIVClientStructs / Dalamud / Lumina / Newtonsoft 类型。 -->
+    <Reference Include="FFXIVClientStructs"><HintPath>$(DalamudLibPath)FFXIVClientStructs.dll</HintPath></Reference>
+    <Reference Include="Dalamud"><HintPath>$(DalamudLibPath)Dalamud.dll</HintPath></Reference>
+    <Reference Include="Dalamud.Bindings.ImGui"><HintPath>$(DalamudLibPath)Dalamud.Bindings.ImGui.dll</HintPath></Reference>
+    <Reference Include="Lumina"><HintPath>$(DalamudLibPath)Lumina.dll</HintPath></Reference>
+    <Reference Include="Lumina.Excel"><HintPath>$(DalamudLibPath)Lumina.Excel.dll</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>$(DalamudLibPath)Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+
+  <!-- 插件程序集在运行时依赖 Dalamud/FFXIVClientStructs 等（非 CopyLocal），
+       将它们整体复制到测试输出目录，使测试宿主能加载插件程序集。 -->
+  <Target Name="CopyDalamudRuntime" AfterTargets="Build">
+    <ItemGroup>
+      <_DalamudDlls Include="$(DalamudLibPath)*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_DalamudDlls)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

@@ -1,0 +1,131 @@
+classDiagram
+    class Plugin {
+        <<IDalamudPlugin>>
+        +IDalamudPluginInterface PluginInterface
+        +IClientState ClientState
+        +IGameInventory GameInventory
+        +IFramework Framework
+        +IDataManager DataManager
+        +Configuration Configuration
+        +AutoDiscardService DiscardService
+        +InventoryWatcher Watcher
+        +MainWindow MainWindow
+        +Dispose()
+    }
+
+    class Configuration {
+        <<IPluginConfiguration>>
+        +bool Enabled
+        +List~TrashItemEntry~ TrashList
+        +bool DiscardHq
+        +QuantityMode Mode
+        +int QuantityThreshold
+        +bool ProtectSaddlebag
+        +List~DiscardLogEntry~ Log
+        +Save()
+        +AddEntry(TrashItemEntry)
+        +RemoveEntry(uint itemId)
+    }
+
+    class TrashItemEntry {
+        +uint ItemId
+        +string DisplayName
+        +bool IsFuzzy
+    }
+
+    class DiscardLogEntry {
+        +DateTime Time
+        +uint ItemId
+        +string ItemName
+        +uint Quantity
+        +InventoryType Container
+        +bool Success
+        +string Note
+    }
+
+    class InventoryWatcher {
+        +event Action~PendingDiscard~ ItemDetected
+        +void Subscribe()
+        +void Unsubscribe()
+        -void OnInventoryChanged(InventoryChangedEvent e)
+        -bool IsEligibleContainer(InventoryType) bool
+    }
+
+    class AutoDiscardService {
+        +Configuration Config
+        +DiscardExecutor Executor
+        +TrashListStore Store
+        +LogStore Log
+        +void OnItemDetected(PendingDiscard p)
+        -bool ShouldDiscard(InventoryItem item, InventoryType t) bool
+        -void ProcessPending()
+    }
+
+    class DiscardExecutor {
+        +int Discard(InventoryType c, ushort slot)
+        +int DiscardPartial(InventoryType c, ushort slot, uint keep)
+        -void EnsureFrameworkThread()
+    }
+
+    class TrashListStore {
+        +List~TrashItemEntry~ GetAll()
+        +bool Contains(uint itemId) bool
+        +void Add(TrashItemEntry e)
+        +void Remove(uint itemId)
+        +IEnumerable~TrashItemEntry~ Search(string q)
+    }
+
+    class LogStore {
+        +void Append(DiscardLogEntry e)
+        +List~DiscardLogEntry~ GetAll()
+        +void Clear()
+    }
+
+    class ItemResolver {
+        +uint? Resolve(string name, bool fuzzy) uint?
+        +string GetName(uint itemId) string
+    }
+
+    class ImportExport {
+        +void ExportJson(string path)
+        +void ImportJson(string path)
+        +void ExportCsv(string path)
+        +void ImportCsv(string path)
+    }
+
+    class MainWindow {
+        +bool IsOpen
+        +void Draw()
+    }
+
+    class Commands {
+        +void Register()
+        +void ToggleWindow()
+    }
+
+    class PendingDiscard {
+        +InventoryType Container
+        +ushort Slot
+        +uint ItemId
+        +uint Quantity
+        +bool IsHq
+    }
+
+    Plugin --> Configuration
+    Plugin --> AutoDiscardService
+    Plugin --> InventoryWatcher
+    Plugin --> MainWindow
+    Configuration "1" *-- "0..*" TrashItemEntry
+    Configuration "1" *-- "0..*" DiscardLogEntry
+    InventoryWatcher ..> PendingDiscard : produces
+    AutoDiscardService --> DiscardExecutor
+    AutoDiscardService --> TrashListStore
+    AutoDiscardService --> LogStore
+    AutoDiscardService ..> PendingDiscard : consumes
+    TrashListStore ..> TrashItemEntry : manages
+    LogStore ..> DiscardLogEntry : manages
+    MainWindow --> TrashListStore
+    MainWindow --> LogStore
+    MainWindow --> ImportExport
+    MainWindow --> ItemResolver
+    Commands --> MainWindow

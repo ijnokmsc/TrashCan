@@ -1,0 +1,39 @@
+sequenceDiagram
+    actor Game
+    participant IM as IGameInventory
+    participant W as InventoryWatcher
+    participant S as AutoDiscardService
+    participant Cfg as Configuration
+    participant Store as TrashListStore
+    participant Ex as DiscardExecutor
+    participant INV as InventoryManager (native)
+    participant Log as LogStore
+
+    Game->>IM: 物品进入背包（ItemAdded / InventoryChanged）
+    IM->>W: InventoryChanged 事件（游戏主线程）
+    W->>W: IsEligibleContainer(container)？
+    alt 容器不在白名单
+        W-->>W: 忽略（受保护容器）
+    else 容器可丢
+        W->>W: 构建 PendingDiscard(c, slot, itemId, qty, isHq)
+        W->>S: ItemDetected(pending)
+        S->>Cfg: Enabled == true？
+        Cfg-->>S: true
+        S->>Store: Contains(itemId)？
+        Store-->>S: true（在丢弃列表中）
+        S->>Cfg: 读取 DiscardHq / Mode / Threshold
+        alt HQ 且 DiscardHq=false
+            S->>Log: 记录「跳过-HQ」
+        else 数量未达阈值（模式相关）
+            S->>Log: 记录「跳过-数量」
+        else 符合丢弃条件
+            Note over S,INV: 在 IFramework.Update 安全帧执行
+            S->>Ex: Discard(container, slot)
+            Ex->>Ex: EnsureFrameworkThread()
+            Ex->>INV: InventoryManager.Instance()->DiscardItem(c, slot)
+            INV-->>Ex: int ret (0=成功)
+            Ex-->>S: ret
+            S->>Log: Append(DiscardLogEntry)
+        end
+    end
+    Note over W,S: 兜底：IFramework.Update 每 ~1s 节流 diff，拾漏未触发事件的项

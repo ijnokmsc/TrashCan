@@ -1,0 +1,42 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <!-- 国服 XIVLauncherCN 的 Dalamud 安装路径
+         Dalamud.NET.Sdk 的 Sdk.props 在 csproj PropertyGroup 之前求值并设置了 DalamudLibPath，
+         但 AssemblySearchPaths 与 DalamudLibPath 均可在 csproj 中覆盖。
+         实际路径: %APPDATA%\XIVLauncherCN\addon\Hooks\dev\ -->
+    <DalamudLibPath>$(appdata)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
+    <AssemblySearchPaths>$(AssemblySearchPaths);$(DalamudLibPath)</AssemblySearchPaths>
+
+    <!-- 程序集名保持 auto_trash_can，与清单 auto_trash_can.json 同名，确保 Dalamud 正确加载 -->
+    <RootNamespace>AutoTrash</RootNamespace>
+    <AssemblyName>auto_trash_can</AssemblyName>
+    <Version>1.0.0.0</Version>
+    <PackageProjectUrl>https://github.com/ijnokmsc/TrashCan</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+
+    <!-- 原生 InventoryManager 调用需要 unsafe 上下文 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <!-- ImGui 绑定标注为 Windows 专用；插件运行于 Windows 游戏客户端，CA1416 噪声可忽略 -->
+    <SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!-- 关闭 SDK 自动生成的 AssemblyInfo，避免与 Dalamud SDK 注入的程序集特性重复（CS0579） -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <!-- 测试项目嵌套在插件目录下（TrashCan.Tests/），排除其源文件避免被本插件项目误编译 -->
+  <ItemGroup>
+    <Compile Remove="TrashCan.Tests\**\*.cs" />
+    <None Remove="TrashCan.Tests\**\*.cs" />
+  </ItemGroup>
+
+  <!-- 编译后自动部署到 XIVLauncherCN devPlugins 目录（参考 CraftFlow 的部署目标，仅改目录名） -->
+  <Target Name="DeployToDevPlugins" AfterTargets="Build">
+    <MakeDir Directories="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\TrashCan\" />
+    <Copy SourceFiles="$(OutputPath)auto_trash_can.dll" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\TrashCan\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OutputPath)auto_trash_can.json" DestinationFolder="C:\Users\zhaoy\AppData\Roaming\XIVLauncherCN\devPlugins\TrashCan\" SkipUnchangedFiles="true" Condition="Exists('$(OutputPath)auto_trash_can.json')" />
+  </Target>
+</Project>

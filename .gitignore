@@ -1,0 +1,22 @@
+# .NET / Dalamud build outputs
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+
+# Test artifacts
+TrashCan.Tests/bin/
+TrashCan.Tests/obj/
+
+# User-specific
+*.user
+.vs/
+.idea/
+.vscode/
+
+# Release artifact (uploaded to GitHub Releases, not committed)
+latest.zip
+
+# OS
+Thumbs.db
+Desktop.ini
