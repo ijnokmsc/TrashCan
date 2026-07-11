@@ -11,6 +11,8 @@
     <RootNamespace>AutoTrash</RootNamespace>
     <AssemblyName>auto_trash_can</AssemblyName>
     <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
     <PackageProjectUrl>https://github.com/ijnokmsc/TrashCan</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
 
@@ -31,6 +33,11 @@
   <ItemGroup>
     <Compile Remove="TrashCan.Tests\**\*.cs" />
     <None Remove="TrashCan.Tests\**\*.cs" />
+  </ItemGroup>
+
+  <!-- 清单文件随构建输出，确保部署到 devPlugins 的版本始终与项目根一致 -->
+  <ItemGroup>
+    <Content Include="auto_trash_can.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- 编译后自动部署到 XIVLauncherCN devPlugins 目录（参考 CraftFlow 的部署目标，仅改目录名） -->
