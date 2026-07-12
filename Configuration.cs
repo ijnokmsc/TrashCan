@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Numerics;
 using Dalamud.Configuration;
 using Dalamud.Plugin;
 using Newtonsoft.Json;
@@ -37,7 +38,27 @@ public class Configuration : IPluginConfiguration
     /// </summary>
     public bool ShowInventoryButton { get; set; } = true;
 
-    /// <summary>数量策略。</summary>
+    /// <summary>
+    /// 背包垃圾桶按钮使用的游戏图标 ID（默认 0 表示使用 FontAwesome 垃圾桶图标）。
+    /// 非 0 时优先加载该游戏图标；若加载失败或 ID 为 0，则回退到 FontAwesome 图标。
+    /// </summary>
+    public uint InventoryButtonIconId { get; set; } = 0u;
+
+    /// <summary>背包垃圾桶按钮缩放倍数（默认 1.0，范围 0.5~2.0）。</summary>
+    public float InventoryButtonScale { get; set; } = 1.0f;
+
+    /// <summary>背包垃圾桶按钮相对背包左侧吸附位置的像素偏移（默认 Vector2.Zero 即紧贴左侧）。</summary>
+    public Vector2 InventoryButtonOffset { get; set; } = new Vector2(0f, 0f);
+
+    /// <summary>是否在松开右键后将背包垃圾桶按钮重新吸附回背包左侧（默认 true）。</summary>
+    public bool InventoryButtonSnapLeft { get; set; } = true;
+
+    /// <summary>
+    /// 是否一直显示背包垃圾桶按钮（默认 false）。
+    /// 为 true 时按钮常驻屏幕、不随背包开关显隐，也不做背包锚定与吸附（不跟随背包移动、松开不回弹）。
+    /// 为 false 时仅在背包打开时显示，并吸附在背包左侧（见 InventoryButtonSnapLeft）。
+    /// </summary>
+    public bool InventoryButtonAlwaysShow { get; set; } = false;
     public QuantityMode Mode { get; set; } = QuantityMode.DiscardAll;
 
     /// <summary>数量阈值（配合 Mode 使用）。</summary>

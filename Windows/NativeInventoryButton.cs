@@ -1,250 +1,249 @@
-using System;
-using Dalamud.Game.Addon;
+using System.Numerics;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Addon.Events;
-using Dalamud.Game.Addon.Events.EventDataTypes;
 using Dalamud.Game.Addon.Lifecycle;
-using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
+using Dalamud.Interface;
+using Dalamud.Interface.Components;
+using Dalamud.Interface.Textures;
+using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Plugin.Services;
-using FFXIVClientStructs.FFXIV.Client.System.Memory;
 using FFXIVClientStructs.FFXIV.Component.GUI;
-using NodeFlags = FFXIVClientStructs.FFXIV.Component.GUI.NodeFlags;
 
 namespace AutoTrash.Windows;
 
 /// <summary>
-/// 背包原生界面注入的「垃圾桶」按钮（F2 / Plan A：手动 AtkUnitBase 注入，无第三方依赖）。
+/// F2「背包垃圾桶按钮」——安全版（纯 ImGui 覆盖层，不再操作原生节点树）。
 ///
-/// 机制（三阶段闭环，缺一不可）：
-///  - PostSetup（注入）：通过 IAddonLifecycle 监听背包 addon（<see cref="TargetAddonName"/>）的 PostSetup，
-///    在 addon 节点树就绪后注入一个 AtkImageNode（垃圾桶图标）。
-///  - PreFinalize（摘除）：监听同一 addon 的 PreFinalize，在 addon 销毁前调用 <see cref="DetachNode"/>，
-///    解链兄弟节点 + 移除原生事件 + Free 节点内存 + 将 injectedNode 复位为 null。
-///    缺此环会导致 injectedNode 成为悬空非空指针，下次 PostSetup 命中 `if (injectedNode != null) return;`
-///    使按钮在「背包关闭再打开」后永久消失。
-///  - Dispose（兜底）：插件卸载时 <see cref="Disable"/> 同样会注销监听并强制 <see cref="DetachNode"/>。
-///  - 通过 IAddonEventManager 为注入节点注册 MouseClick 原生事件，
-///    点击即打开主窗口（MainWindow.Toggle()，与 Enabled 自动丢弃开关完全解耦）。
+/// 历史：初版实现手动 Create&lt;AtkImageNode&gt; 并 LoadIconTexture 注入到背包 addon 节点树，
+/// 但 freshly-created AtkImageNode 的 AtkTexture* Tex 未初始化，LoadIconTexture 解引用空 Tex
+/// 导致游戏 C0000005 崩溃（见 2026-07-13 实机 crash dump，调用栈落在 InjectButton）。
+/// 磁盘上无任何插件对「自建节点」调用 LoadIconTexture，均只对游戏布局已初始化的节点调用。
 ///
-/// 运行时验证项（以 const 形式集中，便于游戏内核对 / 调整）：
-///  - <see cref="TargetAddonName"/>：不同版本 / 语言下背包 addon 名可能不同（常见 "Inventory"）。
-///  - <see cref="TrashIconId"/>：垃圾桶图标 ID，需确认具体编号，当前为占位值。
-///  - <see cref="InjectedNodeId"/> / <see cref="ButtonX"/> / <see cref="ButtonY"/>：注入节点 ID 与相对位置。
+/// 现改方案：纯托管 ImGui 窗口，当背包 addon 处于打开状态时显示，点击打开 AutoTrash 主窗口。
+/// 窗口默认吸附在背包左侧；按住右键可拖动，松开后若启用吸附则自动回到背包左侧。
+/// 完全不触碰原生内存，绝无崩溃风险。
 /// </summary>
-public sealed unsafe class InventoryTrashButton : IDisposable
+public sealed class InventoryTrashButton : IDisposable
 {
-    /// <summary>目标背包 addon 名（运行时需验证；不同版本/语言可能不同，常见为 "Inventory"）。</summary>
-    private const string TargetAddonName = "Inventory";
+    /// <summary>候选背包 addon 名（不同版本/语言可能不同，常见为 "Inventory"）。</summary>
+    private static readonly string[] CandidateAddonNames =
+    {
+        "Inventory", "InventoryLarge", "InventoryGrid", "InventoryExpansion",
+    };
 
-    /// <summary>注入图标节点 ID（使用高位自定义 ID，避免与游戏节点冲突）。</summary>
-    private const uint InjectedNodeId = 990001u;
+    /// <summary>FontAwesome 垃圾桶图标 ID 占位符（默认回退）。</summary>
+    private const FontAwesomeIcon DefaultTrashIcon = FontAwesomeIcon.TrashAlt;
 
-    /// <summary>垃圾桶图标 ID（运行时需验证：需确认具体图标编号，当前为占位值 0）。</summary>
-    private const uint TrashIconId = 0u;
+    /// <summary>图标按钮的基础边长（像素）。最终尺寸会乘以用户配置的缩放。</summary>
+    private const float BaseButtonSize = 40f;
 
-    /// <summary>按钮相对 addon 根节点的 X 偏移（运行时可微调）。</summary>
-    private const float ButtonX = 200f;
+    /// <summary>按钮与背包左侧的间隔（像素）。</summary>
+    private const float AnchorGap = 8f;
 
-    /// <summary>按钮相对 addon 根节点的 Y 偏移（运行时可微调）。</summary>
-    private const float ButtonY = 10f;
+    /// <summary>窗口内边距（像素）。</summary>
+    private const float WindowPaddingBase = 6f;
 
     private readonly Plugin plugin;
-    private readonly IAddonLifecycle addonLifecycle;
-    private readonly IAddonEventManager addonEventManager;
 
-    private AtkImageNode* injectedNode;
-    private IAddonEventHandle? eventHandle;
-    private bool active;
+    /// <summary>缓存的游戏图标共享纹理（避免每帧重新查询，由 TryGetWrap 实际取 wrap）。</summary>
+    private ISharedImmediateTexture? iconTexture;
 
-    public InventoryTrashButton(Plugin plugin, IAddonLifecycle addonLifecycle, IAddonEventManager addonEventManager)
+    private uint lastIconId;
+
+    private bool isDragging;
+
+    public InventoryTrashButton(Plugin plugin, IAddonLifecycle _, IAddonEventManager __)
     {
         this.plugin = plugin;
-        this.addonLifecycle = addonLifecycle;
-        this.addonEventManager = addonEventManager;
-        this.injectedNode = null;
     }
 
-    /// <summary>启用：注册 addon 生命周期监听，等待背包 addon PostSetup 注入按钮。</summary>
+    /// <summary>启用：覆盖层无需注册原生监听，保持接口兼容（Plugin.cs 仍调用 Enable）。</summary>
     public void Enable()
     {
-        if (active)
-        {
-            return;
-        }
-
-        if (!plugin.Configuration.ShowInventoryButton)
-        {
-            return;
-        }
-
-        active = true;
-        addonLifecycle.RegisterListener(AddonEvent.PostSetup, TargetAddonName, OnAddonSetup);
-        addonLifecycle.RegisterListener(AddonEvent.PreFinalize, TargetAddonName, OnAddonFinalize);
     }
 
-    /// <summary>禁用：注销监听并摘除注入的节点 / 事件。</summary>
+    /// <summary>禁用：覆盖层无需摘除原生节点。</summary>
     public void Disable()
     {
-        if (!active)
-        {
-            return;
-        }
-
-        active = false;
-        addonLifecycle.UnregisterListener(AddonEvent.PostSetup, TargetAddonName, OnAddonSetup);
-        addonLifecycle.UnregisterListener(AddonEvent.PreFinalize, TargetAddonName, OnAddonFinalize);
-        DetachNode();
     }
 
     public void Dispose()
     {
         Disable();
+        iconTexture = null;
     }
 
-    // IAddonLifecycle.AddonEventDelegate 签名：(AddonEvent eventType, AddonArgs args)
-    private void OnAddonSetup(AddonEvent eventType, AddonArgs args)
+    /// <summary>每帧由 Plugin.Draw 调用：背包打开时绘制可点击的垃圾桶按钮。</summary>
+    public unsafe void Draw()
     {
-        if (eventType != AddonEvent.PostSetup)
-        {
-            return;
-        }
-
-        if (args.AddonName != TargetAddonName)
-        {
-            return;
-        }
-
         if (!plugin.Configuration.ShowInventoryButton)
         {
             return;
         }
 
-        var addon = (AtkUnitBase*)args.Addon.Address;
-        if (addon == null)
+        var config = plugin.Configuration;
+        var scale = config.InventoryButtonScale;
+        var size = new Vector2(BaseButtonSize * scale, BaseButtonSize * scale);
+        var padding = WindowPaddingBase * scale;
+        var gap = AnchorGap * scale;
+        var windowPadding = new Vector2(padding, padding);
+        var windowSize = size + windowPadding * 2f;
+
+        var alwaysShow = config.InventoryButtonAlwaysShow;
+        Vector2 position;
+        if (alwaysShow)
         {
-            return;
-        }
-
-        InjectButton(addon);
-    }
-
-    // IAddonLifecycle.AddonEventDelegate 签名：(AddonEvent eventType, AddonArgs args)
-    // 闭环第 2 环：addon 即将销毁（背包关闭/重开）时，摘除注入节点、释放事件与内存，
-    // 确保 injectedNode 复位为 null，下次 PostSetup 注入不会被 `if (injectedNode != null) return;` 拦截。
-    private void OnAddonFinalize(AddonEvent eventType, AddonArgs args)
-    {
-        if (eventType != AddonEvent.PreFinalize)
-        {
-            return;
-        }
-
-        if (args.AddonName != TargetAddonName)
-        {
-            return;
-        }
-
-        DetachNode();
-    }
-
-    private void InjectButton(AtkUnitBase* addon)
-    {
-        // 防重复注入（PostSetup 可能多次触发）
-        if (injectedNode != null)
-        {
-            return;
-        }
-
-        var uiSpace = IMemorySpace.GetUISpace();
-        if (uiSpace == null)
-        {
-            return;
-        }
-
-        // Create 内部会 Malloc + Memset(0) + Ctor，无需再手动调用 Ctor
-        var node = uiSpace->Create<AtkImageNode>();
-        if (node == null)
-        {
-            return;
-        }
-
-        node->NodeId = InjectedNodeId;
-        node->X = ButtonX;
-        node->Y = ButtonY;
-        node->NodeFlags = NodeFlags.Visible | NodeFlags.Enabled | NodeFlags.HasCollision | NodeFlags.RespondToMouse | NodeFlags.EmitsEvents;
-
-        // 加载垃圾桶图标（language=0 表示随游戏语言）
-        node->LoadIconTexture(TrashIconId, 0);
-
-        // 手动链接到 addon 根节点子链头部
-        var root = addon->RootNode;
-        if (root != null)
-        {
-            node->ParentNode = root;
-            node->PrevSiblingNode = root->ChildNode;
-            if (root->ChildNode != null)
+            // 常驻模式：按钮始终可见。背包打开时吸附到背包左侧并跟随；背包关闭时回到原位（右上角固定点）。
+            if (TryGetInventoryAddon(out var addon))
             {
-                root->ChildNode->NextSiblingNode = (AtkResNode*)node;
+                position = new Vector2(addon->X - windowSize.X - gap, addon->Y + gap) + config.InventoryButtonOffset;
+            }
+            else
+            {
+                var vp = ImGui.GetMainViewport();
+                var basePos = new Vector2(vp.Pos.X + vp.Size.X - windowSize.X - 16f, vp.Pos.Y + 16f);
+                position = basePos + config.InventoryButtonOffset;
+            }
+        }
+        else
+        {
+            if (!TryGetInventoryAddon(out var addon))
+            {
+                return;
             }
 
-            root->ChildNode = (AtkResNode*)node;
+            // 吸附锚点：背包左侧（按钮右边紧贴背包左边，垂直与背包顶部对齐）。
+            var anchor = new Vector2(addon->X - windowSize.X - gap, addon->Y + gap);
+            position = anchor + config.InventoryButtonOffset;
         }
 
-        injectedNode = node;
+        // 夹取到主视口内，确保按钮窗口永不跑出屏幕（即便背包坐标为异常值也能看到按钮）。
+        var viewport = ImGui.GetMainViewport();
+        var screen = viewport.Size;
+        var clampedX = Math.Clamp(position.X, 0f, Math.Max(0f, screen.X - windowSize.X));
+        var clampedY = Math.Clamp(position.Y, 0f, Math.Max(0f, screen.Y - windowSize.Y));
+        position = new Vector2(clampedX, clampedY);
 
-        // 注册 MouseClick：点击打开主窗口
-        eventHandle = addonEventManager.AddEvent((nint)addon, (nint)node, AddonEventType.MouseClick, OnButtonClick);
+        ImGui.SetNextWindowSize(windowSize, ImGuiCond.Always);
+        ImGui.SetNextWindowPos(position, ImGuiCond.Always);
+
+        var flags = ImGuiWindowFlags.NoTitleBar
+                  | ImGuiWindowFlags.NoResize
+                  | ImGuiWindowFlags.NoScrollbar
+                  | ImGuiWindowFlags.NoScrollWithMouse
+                  | ImGuiWindowFlags.NoBackground
+                  | ImGuiWindowFlags.NoSavedSettings;
+
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, windowPadding);
+        ImGui.Begin("AutoTrashIcon###InvTrashIcon", flags);
+
+        // 右键拖动：按住右键时拖动整个小窗。
+        var hovered = ImGui.IsWindowHovered();
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Right) && hovered)
+        {
+            isDragging = true;
+        }
+
+        if (isDragging)
+        {
+            if (ImGui.IsMouseDown(ImGuiMouseButton.Right))
+            {
+                var io = ImGui.GetIO();
+                config.InventoryButtonOffset += io.MouseDelta;
+            }
+            else
+            {
+                isDragging = false;
+                if (config.InventoryButtonSnapLeft)
+                {
+                    // 保留用户垂直方向的微调，水平方向回到吸附位置。
+                    config.InventoryButtonOffset = new Vector2(0f, config.InventoryButtonOffset.Y);
+                }
+
+                config.Save();
+            }
+        }
+
+        ImGui.SetCursorPos(windowPadding);
+        var clicked = DrawIconButton(size);
+        if (clicked)
+        {
+            plugin.MainWindow.Toggle();
+        }
+
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("打开 AutoTrash\n按住右键可拖动位置");
+        }
+
+        ImGui.End();
+        ImGui.PopStyleVar();
     }
 
-    private void DetachNode()
+    /// <summary>绘制图标按钮：优先使用配置的游戏图标 ID，否则回退 FontAwesome 垃圾桶。</summary>
+    private bool DrawIconButton(Vector2 size)
     {
-        if (eventHandle != null)
+        var iconId = plugin.Configuration.InventoryButtonIconId;
+
+        if (iconId != 0)
         {
-            addonEventManager.RemoveEvent(eventHandle);
-            eventHandle = null;
+            var wrap = GetOrLoadGameIcon(iconId);
+            if (wrap != null)
+            {
+                return ImGui.ImageButton(wrap.Handle, size);
+            }
         }
 
-        if (injectedNode == null)
-        {
-            return;
-        }
-
-        var node = injectedNode;
-
-        // 从父节点子链摘除
-        var parent = node->ParentNode;
-        if (parent != null && parent->ChildNode == node)
-        {
-            parent->ChildNode = node->NextSiblingNode;
-        }
-
-        if (node->PrevSiblingNode != null)
-        {
-            node->PrevSiblingNode->NextSiblingNode = node->NextSiblingNode;
-        }
-
-        if (node->NextSiblingNode != null)
-        {
-            node->NextSiblingNode->PrevSiblingNode = node->PrevSiblingNode;
-        }
-
-        node->ParentNode = null;
-        node->PrevSiblingNode = null;
-        node->NextSiblingNode = null;
-
-        // 释放节点内存（与 Create 对应）
-        IMemorySpace.Free(node);
-
-        injectedNode = null;
+        // 回退：FontAwesome 图标按钮。ImGuiComponents 内部会切换字体，渲染完即恢复。
+        return ImGuiComponents.IconButton(DefaultTrashIcon, size);
     }
 
-    // IAddonEventManager.AddonEventDelegate 签名：(AddonEventType eventType, AddonEventData data)
-    private void OnButtonClick(AddonEventType eventType, AddonEventData data)
+    /// <summary>获取指定游戏图标的可渲染 wrap（带缓存）。</summary>
+    private IDalamudTextureWrap? GetOrLoadGameIcon(uint iconId)
     {
-        if (eventType != AddonEventType.MouseClick)
+        if (iconTexture == null || lastIconId != iconId)
         {
-            return;
+            iconTexture = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(iconId, false, false));
+            lastIconId = iconId;
         }
 
-        // 打开主窗口（与 Enabled 自动丢弃开关解耦）
-        plugin.MainWindow.Toggle();
+        if (iconTexture != null && iconTexture.TryGetWrap(out var wrap, out _))
+        {
+            return wrap;
+        }
+
+        return null;
+    }
+
+    /// <summary>查找当前打开（可见）的背包 addon，返回其指针（只读查询，安全）。</summary>
+    /// <remarks>
+    /// 背包 addon 在 FFXIV 中可能同时存在多个实例，<c>GetAddonByName(name, index)</c> 的 index
+    /// 只是「第几个同名实例」。只锚定 <c>IsVisible</c> 为 true 的活动实例；找不到可见实例时返回
+    /// false，使按钮在背包关闭时不显示。
+    /// </remarks>
+    private static unsafe bool TryGetInventoryAddon(out AtkUnitBase* addon)
+    {
+        addon = null;
+
+        foreach (var name in CandidateAddonNames)
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                var ptr = Plugin.GameGui.GetAddonByName(name, i);
+                if (ptr.IsNull)
+                {
+                    continue;
+                }
+
+                var a = (AtkUnitBase*)ptr.Address;
+                if (a->IsVisible)
+                {
+                    addon = a;
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

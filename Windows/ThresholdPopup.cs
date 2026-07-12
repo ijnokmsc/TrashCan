@@ -36,18 +36,14 @@ public sealed class ThresholdPopup
     }
 
     /// <summary>
-    /// 渲染弹窗。若弹窗未打开（BeginPopup 返回 false）则直接返回 null。
-    /// 用户点击「应用 / 清除阈值」时把结果写入 <paramref name="listStore"/> 并返回状态消息；否则返回 null。
+    /// 渲染弹窗内容（假定调用方已完成 BeginPopup / 将负责 EndPopup）。
+    /// 由 MainWindow 在右键上下文弹窗（BeginPopupContextItem）内调用；用户点击「应用 / 清除阈值」
+    /// 时把结果写入 <paramref name="listStore"/> 并返回状态消息，否则返回 null。
     /// </summary>
     /// <param name="listStore">待写入的列表存储。</param>
     /// <returns>操作状态消息（供主窗口琥珀色展示）；无操作返回 null。</returns>
-    public string? Draw(TrashListStore listStore)
+    public string? DrawContent(TrashListStore listStore)
     {
-        if (!ImGui.BeginPopup(PopupId))
-        {
-            return null;
-        }
-
         string? status = null;
 
         ImGui.Text($"设置保留数量：{itemName}");
@@ -99,7 +95,6 @@ public sealed class ThresholdPopup
             ImGui.CloseCurrentPopup();
         }
 
-        ImGui.EndPopup();
         return status;
     }
 }

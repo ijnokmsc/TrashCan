@@ -2,6 +2,7 @@ using Dalamud.IoC;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using Dalamud.Game.Gui;
 using AutoTrash.Core;
 using AutoTrash.Services;
 using AutoTrash.Windows;
@@ -40,6 +41,12 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
 
     /// <summary>原生 addon 事件管理器：为注入的垃圾桶按钮注册 MouseClick 原生事件。</summary>
     [PluginService] public static IAddonEventManager AddonEventManager { get; set; } = null!;
+
+    /// <summary>游戏 GUI 服务：用于在插件加载时若背包已处于打开状态，主动注入垃圾桶按钮（PostSetup 不会再触发）。</summary>
+    [PluginService] public static IGameGui GameGui { get; set; } = null!;
+
+    /// <summary>插件日志服务：用于输出原生按钮注入/摘除的诊断信息，便于实机排查。</summary>
+    [PluginService] public static IPluginLog PluginLog { get; set; } = null!;
 
     public Configuration Configuration { get; }
     public TrashListStore TrashListStore { get; }
@@ -95,6 +102,7 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
     private void Draw()
     {
         WindowSystem.Draw();
+        TrashButton?.Draw();
     }
 
     /// <summary>UiBuilder.OpenMainUi 处理器：主窗口同时是主 UI 与配置入口，直接打开即可。</summary>

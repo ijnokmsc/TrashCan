@@ -68,12 +68,20 @@ public class MainWindow : Window
     }
 
     /// <summary>通用背包格子数据：供 DrawItemGrid 复用的单个物品格子信息。</summary>
+    // 列表格配色：全丢（红）/ 部分丢弃（琥珀）。背景用低不透明度，边框由同 RGB + 高不透明度推导。
+    private const uint FullDiscardTint = 0x333333CCu;      // A=0x33 R=0xCC G=0x33 B=0x33
+    private const uint PartialDiscardTint = 0x3300B8E6u;    // A=0x33 R=0xE6 G=0xB8 B=0x00
+    private const uint FullDiscardSwatch = 0xFF3333CCu;     // 图例色块（不透明）
+    private const uint PartialDiscardSwatch = 0xFF00B8E6u;
+
     private readonly record struct GridCell(
         uint ItemId,
         int Quantity,
         bool IsSelected,
         string Tooltip,
-        bool ShowQuantity);
+        bool ShowQuantity,
+        uint Tint,
+        string? Badge);
 
     public MainWindow(Plugin plugin) : base($"AutoTrash 自动丢弃垃圾桶 {GetVersionString()}")
     {
@@ -230,12 +238,26 @@ public class MainWindow : Window
             // 悬停预判（不依赖控件，可在画背景前安全调用）
             var hovered = ImGui.IsMouseHoveringRect(topLeft, bottomRight);
 
-            // 背景：选中=半透明金，悬停=主题悬停色，普通=主题底（圆角 4 更像游戏格子）
-            var bg = cell.IsSelected ? goldFill : (hovered ? themeFrameBgHovered : themeFrameBg);
-            drawList.AddRectFilled(topLeft, bottomRight, bg, 4f);
+            // 背景与边框：选中=金色；否则若有 Tint（列表页区分全丢/部分丢弃）用 Tint；否则主题底
+            uint bg;
+            uint border;
+            if (cell.IsSelected)
+            {
+                bg = cell.Tint != 0 ? cell.Tint : goldFill;
+                border = goldBorder;
+            }
+            else if (cell.Tint != 0)
+            {
+                bg = cell.Tint;
+                border = (cell.Tint & 0x00FFFFFFu) | 0xCC000000u; // 同 RGB，边框用高不透明度
+            }
+            else
+            {
+                bg = hovered ? themeFrameBgHovered : themeFrameBg;
+                border = themeBorder;
+            }
 
-            // 边框：选中=金色，否则=主题 Border（暗色）
-            var border = cell.IsSelected ? goldBorder : themeBorder;
+            drawList.AddRectFilled(topLeft, bottomRight, bg, 4f);
             drawList.AddRect(topLeft, bottomRight, border, 4f, ImDrawFlags.None, 1.5f);
 
             // 图标（居中偏上，游戏原生图标，保持 HQ 偏移修复）
@@ -257,10 +279,23 @@ public class MainWindow : Window
                 drawList.AddText(qtyPos, 0xFFFFFFFFu, qtyText);
             }
 
+            // 丢弃类型徽标（左下角）：全丢="全"，部分丢弃="留N"，与列表配色一致
+            if (!string.IsNullOrEmpty(cell.Badge))
+            {
+                var badgePos = topLeft + new Vector2(2, cellSize - ImGui.CalcTextSize(cell.Badge).Y - 2);
+                drawList.AddText(badgePos + new Vector2(1, 0), 0xFF000000u, cell.Badge);
+                drawList.AddText(badgePos + new Vector2(-1, 0), 0xFF000000u, cell.Badge);
+                drawList.AddText(badgePos + new Vector2(0, 1), 0xFF000000u, cell.Badge);
+                drawList.AddText(badgePos + new Vector2(0, -1), 0xFF000000u, cell.Badge);
+                drawList.AddText(badgePos, 0xFFFFFFFFu, cell.Badge);
+            }
+
             // 选中标记：右上角金色对勾（替代原 Checkbox 控件）
             if (cell.IsSelected)
             {
-                drawList.AddText(topLeft + new Vector2(3, 1), goldBorder, "✓");
+                var chk = "✓";
+                var chkSize = ImGui.CalcTextSize(chk);
+                drawList.AddText(topLeft + new Vector2(cellSize - chkSize.X - 3, 1), goldBorder, chk);
             }
 
             // 整格点击交互：覆盖整格的 InvisibleButton，点击即触发回调
@@ -271,10 +306,26 @@ public class MainWindow : Window
                 onCellClick(i);
             }
 
-            // 右键检测：在格子范围内右键 → 触发右键回调（设置保留数量）
-            if (onCellRightClick != null && ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+            // 右键上下文菜单：BeginPopupContextItem 是 Dalamud/ImGui 在游戏内检测右键的稳健方式。
+            // 直接 IsItemClicked/IsMouseClicked(Right) 在 FFXIV 中常被游戏吞掉而失效。
+            if (onCellRightClick != null)
             {
-                onCellRightClick(i);
+                // 仅在右键松开且悬停本格的“开帧”准备初始状态，避免每帧重置用户输入
+                if (ImGui.IsItemHovered() && ImGui.IsMouseReleased(ImGuiMouseButton.Right))
+                {
+                    onCellRightClick(i);
+                }
+
+                if (ImGui.BeginPopupContextItem($"##cellctx_{cell.ItemId}_{i}"))
+                {
+                    var s = _thresholdPopup.DrawContent(listStore);
+                    if (!string.IsNullOrEmpty(s))
+                    {
+                        statusMsg = s;
+                    }
+
+                    ImGui.EndPopup();
+                }
             }
 
             ImGui.PopID();
@@ -359,12 +410,8 @@ public class MainWindow : Window
 
         ImGui.EndTabBar();
 
-        // 渲染「保留数量」弹窗（添加页 / 列表页右键触发），并把结果写回列表存储
-        var thresholdStatus = _thresholdPopup.Draw(listStore);
-        if (!string.IsNullOrEmpty(thresholdStatus))
-        {
-            statusMsg = thresholdStatus;
-        }
+        // 注：「保留数量」弹窗已改为在 DrawItemGrid 内由 BeginPopupContextItem 直接渲染，
+        // 不再需要在此处统一调用 _thresholdPopup.Draw。
 
         UiHelpers.Status(statusMsg);
         statusMsg = string.Empty;
@@ -417,12 +464,23 @@ public class MainWindow : Window
         {
             var bag = bagItems[i];
             var listed = listStore.Items.Any(e => e.ItemId == bag.ItemId);
+            // 已在丢弃列表中的物品做颜色着色：部分丢弃=琥珀，全丢=红；添加页不显示角标文字。
+            var entry = listStore.Items.FirstOrDefault(e => e.ItemId == bag.ItemId);
+            uint tint = 0u;
+            string? badge = null;
+            if (entry != null)
+            {
+                tint = entry.HasThreshold ? PartialDiscardTint : FullDiscardTint;
+            }
+
             cells.Add(new GridCell(
                 bag.ItemId,
                 bag.Quantity,
                 listed,
                 $"{GetBagItemDisplayName(bag)}\nItemId={bag.ItemId}{(bag.IsHq ? " [HQ]" : string.Empty)}",
-                true));
+                true,
+                tint,
+                badge));
         }
 
         DrawItemGrid(
@@ -433,7 +491,6 @@ public class MainWindow : Window
                 var bag = bagItems[i];
                 // 添加页右键：初值=当前背包数量、启用阈值（先不丢，由用户下调）
                 _thresholdPopup.Prepare(bag.ItemId, GetBagItemDisplayName(bag), bag.Quantity, true);
-                ImGui.OpenPopup(ThresholdPopup.PopupId);
             });
     }
 
@@ -550,6 +607,10 @@ public class MainWindow : Window
             ImGui.EndPopup();
         }
 
+        // 图例（说明）：用色块区分全丢 / 部分丢弃，与列表格配色一致
+        DrawDiscardLegend();
+        ImGui.Separator();
+
         // 仿游戏背包网格：展示已加入丢弃列表的物品，点击整格即移除该物品。
         DrawListGrid();
 
@@ -613,6 +674,39 @@ public class MainWindow : Window
     }
 
     /// <summary>
+    /// <summary>uint(0xAABBGGRR) → Vector4，供 ImGui.ColorButton / 绘制色块使用。</summary>
+    private static Vector4 ToVec4(uint c)
+    {
+        var a = (byte)(c >> 24);
+        var b = (byte)(c >> 16);
+        var g = (byte)(c >> 8);
+        var r = (byte)c;
+        return new Vector4(r / 255f, g / 255f, b / 255f, a / 255f);
+    }
+
+    /// <summary>在光标处画一个 14x14 色块（用 DrawList，避免依赖 ColorButton 签名差异），并预留布局空间。</summary>
+    private static void DrawColorBlock(uint color)
+    {
+        var p = ImGui.GetCursorScreenPos();
+        var dl = ImGui.GetWindowDrawList();
+        dl.AddRectFilled(p, p + new Vector2(14, 14), color, 2f);
+        ImGui.Dummy(new Vector2(14, 14));
+    }
+
+    /// <summary>列表页图例（说明）：用色块区分全丢 / 部分丢弃，与格子配色一致。</summary>
+    private void DrawDiscardLegend()
+    {
+        ImGui.Text("丢弃类型：");
+        ImGui.SameLine();
+        DrawColorBlock(FullDiscardSwatch);
+        ImGui.SameLine();
+        ImGui.Text("全丢");
+        ImGui.SameLine();
+        DrawColorBlock(PartialDiscardSwatch);
+        ImGui.SameLine();
+        ImGui.Text("部分丢弃");
+    }
+
     /// 列表页的仿游戏背包网格：展示已加入丢弃列表的物品（可包含不在当前背包中的物品）。
     /// 与添加页共用 DrawItemGrid；支持 Compact/Standard/Relaxed 三种模式（沿用 CurrentGridMode）。
     /// 列表物品无数量信息，故不显示数量角标；点击整格即从列表中移除该物品。
@@ -650,18 +744,27 @@ public class MainWindow : Window
             return;
         }
 
-        // 构造通用格子数据：列表物品无数量，ShowQuantity=false（只显示图标 + 名称 tooltip）
+        // 构造通用格子数据：列表物品无数量，ShowQuantity=false；按是否设阈值着色 + 角标区分全丢/部分丢弃
         var cells = new List<GridCell>(filtered.Count);
         foreach (var e in filtered)
         {
             var name = GetEntryDisplayName(e);
             var tooltip = $"{name}\nItemId={e.ItemId}{(e.IsFuzzy ? "  |  模糊匹配" : string.Empty)}";
+            uint tint;
+            string? badge;
             if (e.HasThreshold)
             {
-                tooltip += $"\n保留数量：{e.QuantityThreshold}（仅丢超出部分）";
+                tint = PartialDiscardTint;
+                badge = $"留{e.QuantityThreshold}";
+                tooltip += $"\n保留数量：{e.QuantityThreshold}（仅丢超出部分，部分丢弃）";
+            }
+            else
+            {
+                tint = FullDiscardTint;
+                badge = "全";
             }
 
-            cells.Add(new GridCell(e.ItemId, 1, false, tooltip, false));
+            cells.Add(new GridCell(e.ItemId, 1, false, tooltip, false, tint, badge));
         }
 
         // 点击整格即从列表中移除该物品；右键打开「保留数量」弹窗（filtered 为本次快照，移除不影响已构建的网格）
@@ -674,7 +777,6 @@ public class MainWindow : Window
                 var name = GetEntryDisplayName(e);
                 // 列表页右键：初值=已设阈值（未启用则 0）、启用=条目 HasThreshold
                 _thresholdPopup.Prepare(e.ItemId, name, e.HasThreshold ? e.QuantityThreshold : 0, e.HasThreshold);
-                ImGui.OpenPopup(ThresholdPopup.PopupId);
             });
     }
 
@@ -799,6 +901,111 @@ public class MainWindow : Window
 
         ImGui.SameLine();
         UiHelpers.HelpMarker("DiscardAll：忽略阈值，整堆丢弃。DiscardAboveThreshold：数量超过阈值才整堆丢弃。KeepBelowThreshold：仅丢弃超过阈值的部分，保留阈值数量。");
+
+        ImGui.Separator();
+        ImGui.Text("背包垃圾桶按钮：");
+
+        // 显示开关
+        var showInvButton = config.ShowInventoryButton;
+        if (ImGui.Checkbox("显示背包垃圾桶按钮", ref showInvButton))
+        {
+            config.ShowInventoryButton = showInvButton;
+            config.Save();
+        }
+
+        ImGui.SameLine();
+        UiHelpers.HelpMarker("在背包窗口左上角左侧显示一个垃圾桶图标按钮，点击打开 AutoTrash 主窗口。关闭后按钮完全隐藏。");
+
+        // 一直显示
+        var alwaysShow = config.InventoryButtonAlwaysShow;
+        if (ImGui.Checkbox("一直显示（不随背包开关显隐）", ref alwaysShow))
+        {
+            config.InventoryButtonAlwaysShow = alwaysShow;
+            config.Save();
+        }
+
+        ImGui.SameLine();
+        UiHelpers.HelpMarker("开启后按钮常驻屏幕（不再随背包开关隐藏）：背包打开时吸附到背包左侧并跟随，背包关闭时回到原位。不勾选则仅在背包打开时显示并吸附左侧。");
+
+        // 图标 ID
+        var iconId = (int)config.InventoryButtonIconId;
+        ImGui.PushItemWidth(120f);
+        if (ImGui.InputInt("图标 ID（0 = 默认垃圾桶图标）", ref iconId))
+        {
+            if (iconId < 0)
+            {
+                iconId = 0;
+            }
+
+            config.InventoryButtonIconId = (uint)iconId;
+            config.Save();
+        }
+
+        ImGui.PopItemWidth();
+
+        ImGui.SameLine();
+        UiHelpers.HelpMarker("填写游戏图标 ID 可替换默认垃圾桶图标；填 0 使用 Dalamud 内置 FontAwesome 垃圾桶图标。");
+
+        // 缩放
+        var scale = config.InventoryButtonScale;
+        ImGui.PushItemWidth(200f);
+        if (ImGui.SliderFloat("按钮缩放", ref scale, 0.5f, 2.0f, "%.2f"))
+        {
+            config.InventoryButtonScale = scale;
+            config.Save();
+        }
+
+        ImGui.PopItemWidth();
+
+        // 偏移 X / Y
+        var offset = config.InventoryButtonOffset;
+        ImGui.PushItemWidth(120f);
+        if (ImGui.InputFloat("水平偏移", ref offset.X, 1f, 10f, "%.0f"))
+        {
+            config.InventoryButtonOffset = offset;
+            config.Save();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.InputFloat("垂直偏移", ref offset.Y, 1f, 10f, "%.0f"))
+        {
+            config.InventoryButtonOffset = offset;
+            config.Save();
+        }
+
+        ImGui.PopItemWidth();
+
+        ImGui.SameLine();
+        if (ImGui.Button("重置偏移"))
+        {
+            config.InventoryButtonOffset = new Vector2(0f, 0f);
+            config.Save();
+        }
+
+        // 吸附左侧
+        var snapLeft = config.InventoryButtonSnapLeft;
+        if (alwaysShow)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Checkbox("松开右键后吸附到背包左侧", ref snapLeft))
+        {
+            config.InventoryButtonSnapLeft = snapLeft;
+            if (snapLeft)
+            {
+                config.InventoryButtonOffset = new Vector2(0f, config.InventoryButtonOffset.Y);
+            }
+            config.Save();
+        }
+
+        if (alwaysShow)
+        {
+            ImGui.EndDisabled();
+        }
+
+        ImGui.SameLine();
+        UiHelpers.HelpMarker("默认按钮吸附在背包左侧；按住右键可拖动整个图标小窗，松开后自动回到左侧。关闭吸附后右键拖动可自由摆放。");
 
         ImGui.Separator();
         if (ImGui.Button("保存设置"))

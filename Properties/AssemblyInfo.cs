@@ -7,6 +7,6 @@ using System.Reflection;
 // 导致 DLL 版本回退为 0.0.0.0 —— 表现为窗口标题显示 v0.0.0、清单 AssemblyVersion 为 0.0.0.0。
 // 因此必须在此手动声明，Dalamud SDK 不会注入 AssemblyVersion（否则会与本文件冲突、报 CS0579），
 // 故此处是版本的唯一来源。
-[assembly: AssemblyVersion("1.0.2.0")]
-[assembly: AssemblyFileVersion("1.0.2.0")]
-[assembly: AssemblyInformationalVersion("1.0.2.0")]
+[assembly: AssemblyVersion("1.0.3.0")]
+[assembly: AssemblyFileVersion("1.0.3.0")]
+[assembly: AssemblyInformationalVersion("1.0.3.0")]
