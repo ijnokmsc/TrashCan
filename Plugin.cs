@@ -35,12 +35,6 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
     /// <summary>纹理提供器（用于加载物品游戏图标）。</summary>
     [PluginService] public static ITextureProvider TextureProvider { get; set; } = null!;
 
-    /// <summary>原生 addon 生命周期服务：监听背包 addon 的 PostSetup / PreFinalize 以注入 / 摘除垃圾桶按钮。</summary>
-    [PluginService] public static IAddonLifecycle AddonLifecycle { get; set; } = null!;
-
-    /// <summary>原生 addon 事件管理器：为注入的垃圾桶按钮注册 MouseClick 原生事件。</summary>
-    [PluginService] public static IAddonEventManager AddonEventManager { get; set; } = null!;
-
     public Configuration Configuration { get; }
     public TrashListStore TrashListStore { get; }
     public LogStore LogStore { get; }
@@ -50,7 +44,6 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
     public InventoryWatcher InventoryWatcher { get; }
     public MainWindow MainWindow { get; }
     public Commands Commands { get; }
-    public InventoryTrashButton? TrashButton { get; }
     public WindowSystem WindowSystem { get; } = new();
 
     public Plugin()
@@ -69,10 +62,6 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
         InventoryWatcher = new InventoryWatcher(GameInventory, Framework, ClientState, Configuration, TrashListStore, ItemResolver);
         MainWindow = new MainWindow(this);
         Commands = new Commands(this);
-
-        // 背包原生垃圾桶按钮：注入 + 生命周期（与 Enabled 解耦）
-        TrashButton = new InventoryTrashButton(this, AddonLifecycle, AddonEventManager);
-        TrashButton.Enable();
 
         // 背包监控 -> 自动丢弃队列
         InventoryWatcher.ItemPending += entry => AutoDiscardService.Enqueue(entry);
@@ -112,8 +101,6 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
         Commands.Unregister();
         InventoryWatcher.Disable();
         AutoDiscardService.Dispose();
-        TrashButton?.Disable();
-        TrashButton?.Dispose();
         WindowSystem.RemoveAllWindows();
     }
 }
