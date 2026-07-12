@@ -62,4 +62,10 @@ public static class UiHelpers
             ImGui.EndTooltip();
         }
     }
+
+    /// <summary>右键提示（灰色小字）：提示用户可右键物品格子设置「保留数量」阈值。</summary>
+    public static void RightClickHint()
+    {
+        Hint("右键物品格子可设置「保留数量」：仅丢超出部分，保留 N 个（条目级阈值，与全局策略独立）。");
+    }
 }

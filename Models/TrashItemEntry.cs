@@ -17,6 +17,20 @@ public class TrashItemEntry
     /// <summary>是否启用模糊（子串）匹配。</summary>
     public bool IsFuzzy { get; set; }
 
+    /// <summary>
+    /// 条目级「保留数量」阈值。当 <see cref="HasThreshold"/> 为 true 时，以本值作为 KeepBelowThreshold 的阈值，
+    /// 仅丢弃超出本值的部分（保留本值个）。默认 0。
+    /// 旧配置反序列化时缺省为 0，不影响既有「无阈值=全局策略」行为（零回归）。
+    /// </summary>
+    public int QuantityThreshold { get; set; } = 0;
+
+    /// <summary>
+    /// 是否启用条目级阈值。true 时强制 KeepBelowThreshold + <see cref="QuantityThreshold"/>；
+    /// false（默认）时回退全局 config.Mode / config.QuantityThreshold。
+    /// 旧配置反序列化缺省为 false，零回归。
+    /// </summary>
+    public bool HasThreshold { get; set; } = false;
+
     public TrashItemEntry()
     {
     }

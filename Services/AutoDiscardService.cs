@@ -164,6 +164,13 @@ public class AutoDiscardService : IDisposable
         //        避免误丢旧槽位上已被压缩后占据的未授权物品（Bug 2 的核心隐患）。
         //   容器瞬时不可访问（读取抛异常）-> 无法验证，回退到扫描时记录的原始槽位
         //        (fallbackSlot = item.Slot) 继续丢弃，沿用旧口径、不冒险跳过。
+        // 条目级阈值反查：命中条目且启用阈值 → 强制 KeepBelowThreshold + 条目阈值；
+        // 否则回退全局策略（config.Mode / config.QuantityThreshold）。
+        // 旧列表（无 HasThreshold 字段）反序列化默认 false，故完全走全局，行为不变（零回归）。
+        var entry = trashListStore.GetEntry(item.ItemId, itemName);
+        var effectiveMode = ResolveMode(entry);
+        var effectiveThreshold = ResolveThreshold(entry);
+
         var discardSlot = ResolveCurrentSlot(container, item.ItemId, item.IsHq, item.Slot);
         if (discardSlot < 0)
         {
@@ -172,14 +179,14 @@ public class AutoDiscardService : IDisposable
         }
 
         int discardResult;
-        switch (config.Mode)
+        switch (effectiveMode)
         {
             case QuantityMode.DiscardAll:
                 discardResult = executor.Discard(container, (ushort)discardSlot);
                 break;
 
             case QuantityMode.DiscardAboveThreshold:
-                if (item.Quantity > config.QuantityThreshold)
+                if (item.Quantity > effectiveThreshold)
                 {
                     discardResult = executor.Discard(container, (ushort)discardSlot);
                 }
@@ -191,9 +198,10 @@ public class AutoDiscardService : IDisposable
                 break;
 
             case QuantityMode.KeepBelowThreshold:
-                if (item.Quantity > config.QuantityThreshold)
+                if (item.Quantity > effectiveThreshold)
                 {
-                    var excess = item.Quantity - config.QuantityThreshold;
+                    // SplitAndDiscard 仅丢超出部分（excess = 当前数量 - 保留阈值），按 slot 安全判定，绝不超丢。
+                    var excess = item.Quantity - effectiveThreshold;
                     discardResult = executor.SplitAndDiscard(container, (ushort)discardSlot, excess);
                 }
                 else
@@ -212,6 +220,10 @@ public class AutoDiscardService : IDisposable
         // 所有跳过（容器/列表/装备/HQ/阈值未达）与失败均不记录，避免日志被无意义的跳过信息刷屏。
         if (discardResult == 0)
         {
+            var kept = effectiveMode == QuantityMode.KeepBelowThreshold ? effectiveThreshold : 0;
+            var note = effectiveMode == QuantityMode.KeepBelowThreshold
+                ? $"保留 {kept}，仅丢超出部分：{itemName} x{item.Quantity - kept}"
+                : $"丢弃 {itemName} x{item.Quantity}";
             logStore.Append(new DiscardLogEntry(
                 DateTime.Now,
                 item.ItemId,
@@ -219,8 +231,36 @@ public class AutoDiscardService : IDisposable
                 (uint)item.Quantity,
                 item.Container,
                 true,
-                $"丢弃 {itemName} x{item.Quantity}"));
+                note));
         }
+    }
+
+    /// <summary>
+    /// 解析条目生效模式：条目启用阈值（HasThreshold=true）→ 强制 KeepBelowThreshold；
+    /// 否则回退全局 config.Mode。保证「条目级保留 N」语义，且不改变无阈值条目的旧行为。
+    /// </summary>
+    private QuantityMode ResolveMode(TrashItemEntry? entry)
+    {
+        if (entry != null && entry.HasThreshold)
+        {
+            return QuantityMode.KeepBelowThreshold;
+        }
+
+        return config.Mode;
+    }
+
+    /// <summary>
+    /// 解析条目生效阈值：条目启用阈值（HasThreshold=true）→ 条目 QuantityThreshold；
+    /// 否则回退全局 config.QuantityThreshold。
+    /// </summary>
+    private int ResolveThreshold(TrashItemEntry? entry)
+    {
+        if (entry != null && entry.HasThreshold)
+        {
+            return entry.QuantityThreshold;
+        }
+
+        return config.QuantityThreshold;
     }
 
     /// <summary>重新定位目标物品在当前容器内的真实槽位。背包每次丢弃后会自动压缩，

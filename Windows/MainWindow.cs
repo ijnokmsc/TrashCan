@@ -36,6 +36,9 @@ public class MainWindow : Window
     // 「首次使用警告」弹窗开关：第一次打开主窗口时置 true 并 OpenPopup 一次，避免每帧重复调用 OpenPopup。
     private bool firstWarnOpen = false;
 
+    // 右键「保留数量」弹窗（添加页 / 列表页共用）。
+    private readonly ThresholdPopup _thresholdPopup = new();
+
     // 物品图标纹理缓存：key = Lumina 图标 ID，缓存共享纹理句柄（同步可取，避免缓存尚未加载完成的 null wrap）
     private readonly Dictionary<ushort, ISharedImmediateTexture?> itemIconCache = new();
 
@@ -193,7 +196,7 @@ public class MainWindow : Window
     /// </summary>
     /// <param name="cells">格子数据（顺序即展示顺序，点击回调的 index 与之对应）。</param>
     /// <param name="onCellClick">整格被点击时的回调，传入被点击格子的下标。</param>
-    private void DrawItemGrid(IReadOnlyList<GridCell> cells, Action<int> onCellClick)
+    private void DrawItemGrid(IReadOnlyList<GridCell> cells, Action<int> onCellClick, Action<int>? onCellRightClick = null)
     {
         if (cells.Count == 0)
         {
@@ -266,6 +269,12 @@ public class MainWindow : Window
             if (ImGui.InvisibleButton($"##cell{cell.ItemId}_{i}", new Vector2(cellSize, cellSize)))
             {
                 onCellClick(i);
+            }
+
+            // 右键检测：在格子范围内右键 → 触发右键回调（设置保留数量）
+            if (onCellRightClick != null && ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+            {
+                onCellRightClick(i);
             }
 
             ImGui.PopID();
@@ -350,6 +359,13 @@ public class MainWindow : Window
 
         ImGui.EndTabBar();
 
+        // 渲染「保留数量」弹窗（添加页 / 列表页右键触发），并把结果写回列表存储
+        var thresholdStatus = _thresholdPopup.Draw(listStore);
+        if (!string.IsNullOrEmpty(thresholdStatus))
+        {
+            statusMsg = thresholdStatus;
+        }
+
         UiHelpers.Status(statusMsg);
         statusMsg = string.Empty;
 
@@ -382,6 +398,7 @@ public class MainWindow : Window
     {
         ImGui.Text("仿游戏背包：点击格子加入 / 移除丢弃列表");
         UiHelpers.Hint("点击格子切换：选中即加入丢弃列表，取消即移除。");
+        UiHelpers.RightClickHint();
 
         // 模式切换：紧凑 / 标准 / 宽松（持久化到 Configuration.GridMode）
         DrawGridModeSelector();
@@ -408,7 +425,16 @@ public class MainWindow : Window
                 true));
         }
 
-        DrawItemGrid(cells, i => ToggleTrashItem(bagItems[i], !cells[i].IsSelected));
+        DrawItemGrid(
+            cells,
+            i => ToggleTrashItem(bagItems[i], !cells[i].IsSelected),
+            i =>
+            {
+                var bag = bagItems[i];
+                // 添加页右键：初值=当前背包数量、启用阈值（先不丢，由用户下调）
+                _thresholdPopup.Prepare(bag.ItemId, GetBagItemDisplayName(bag), bag.Quantity, true);
+                ImGui.OpenPopup(ThresholdPopup.PopupId);
+            });
     }
 
     /// <summary>实时读取背包（Inventory1-4）物品；主线程绘制期调用，安全，不缓存到字段以避免 stale。</summary>
@@ -629,16 +655,27 @@ public class MainWindow : Window
         foreach (var e in filtered)
         {
             var name = GetEntryDisplayName(e);
-            cells.Add(new GridCell(
-                e.ItemId,
-                1,
-                false,
-                $"{name}\nItemId={e.ItemId}{(e.IsFuzzy ? "  |  模糊匹配" : string.Empty)}",
-                false));
+            var tooltip = $"{name}\nItemId={e.ItemId}{(e.IsFuzzy ? "  |  模糊匹配" : string.Empty)}";
+            if (e.HasThreshold)
+            {
+                tooltip += $"\n保留数量：{e.QuantityThreshold}（仅丢超出部分）";
+            }
+
+            cells.Add(new GridCell(e.ItemId, 1, false, tooltip, false));
         }
 
-        // 点击整格即从列表中移除该物品（filtered 为本次快照，移除不影响已构建的网格）
-        DrawItemGrid(cells, i => listStore.Remove(filtered[i]));
+        // 点击整格即从列表中移除该物品；右键打开「保留数量」弹窗（filtered 为本次快照，移除不影响已构建的网格）
+        DrawItemGrid(
+            cells,
+            i => listStore.Remove(filtered[i]),
+            i =>
+            {
+                var e = filtered[i];
+                var name = GetEntryDisplayName(e);
+                // 列表页右键：初值=已设阈值（未启用则 0）、启用=条目 HasThreshold
+                _thresholdPopup.Prepare(e.ItemId, name, e.HasThreshold ? e.QuantityThreshold : 0, e.HasThreshold);
+                ImGui.OpenPopup(ThresholdPopup.PopupId);
+            });
     }
 
     private void DrawSettingsTab()

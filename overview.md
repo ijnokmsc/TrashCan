@@ -30,9 +30,18 @@
 - 版本：1.0.0.0，DalamudApiLevel 15
 - 下载链路实测：200 OK
 
+## v1.0.1 修复（版本号显示 0.0.0 + 补发前 5 项 Bug 修复）
+- 根因：`csproj` 的 `<GenerateAssemblyInfo>false</GenerateAssemblyInfo>` 使 `<AssemblyVersion>1.0.0.0</AssemblyVersion>` 属性失效，DLL 版本回退 0.0.0.0 → 窗口标题显示 `v0.0.0`、清单 `AssemblyVersion` 为 0.0.0.0。
+- 修复：新增 `Properties/AssemblyInfo.cs` 手动声明 `[assembly: AssemblyVersion("1.0.1.0")]`（Dalamud SDK 不注入 AssemblyVersion，无 CS0579 冲突）。
+- 版本 bump 至 1.0.1.0；此版本同时包含此前未发布的 5 项 Bug 修复（Paused 失效、槽位重定位、标题版本、两份 README）。
+- Release：https://github.com/ijnokmsc/TrashCan/releases/tag/v1.0.1 ；插件源 `pluginmaster.json` 已同步版本与下载链接（v1.0.1）。
+- 打包注意：`bin/Release/auto_trash_can/` 是 Dalamud SDK 生成的嵌套子目录（含旧 latest.zip 残留），发布包应只取根目录 `auto_trash_can.dll` + `auto_trash_can.json` + `auto_trash_can.deps.json`，勿递归打包整个 bin/Release。
+
 ## 验证结果
-- 构建：`dotnet build` 0 错误 / 0 警告
-- 测试：`dotnet test` 83 / 83 通过（Bug 2 安全回退新增 1 项回归）
+- 构建：`dotnet build -c Release` 0 错误 / 0 警告
+- DLL 版本：1.0.1.0（bin/Release 与 devPlugins 均确认）
+- 测试：`dotnet test` 83 / 83 通过
+- Release 下载链路：200 OK
 
 ## 涉及文件
 - `Core/Constants.cs`

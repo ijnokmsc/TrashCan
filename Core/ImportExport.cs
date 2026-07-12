@@ -44,13 +44,13 @@ public static class ImportExport
     public static string ExportCsv(List<TrashItemEntry> list)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("ItemId,DisplayName,IsFuzzy");
+        sb.AppendLine("ItemId,DisplayName,IsFuzzy,QuantityThreshold,HasThreshold");
         if (list != null)
         {
             foreach (var e in list)
             {
                 var name = (e.DisplayName ?? string.Empty).Replace("\"", "\"\"");
-                sb.AppendLine($"{e.ItemId},\"{name}\",{e.IsFuzzy}");
+                sb.AppendLine($"{e.ItemId},\"{name}\",{e.IsFuzzy},{e.QuantityThreshold},{e.HasThreshold}");
             }
         }
 
@@ -94,12 +94,29 @@ public static class ImportExport
             var name = cells[1].Trim();
             var fuzzy = cells.Count >= 3 && bool.TryParse(cells[2].Trim(), out var f) && f;
 
+            // 条目级阈值列（向后兼容：旧 CSV 缺列时默认 0 / false）
+            var threshold = 0;
+            var hasThreshold = false;
+            if (cells.Count >= 4)
+            {
+                int.TryParse(cells[3].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out threshold);
+            }
+
+            if (cells.Count >= 5)
+            {
+                bool.TryParse(cells[4].Trim(), out hasThreshold);
+            }
+
             if (itemId == 0 && string.IsNullOrWhiteSpace(name))
             {
                 continue;
             }
 
-            result.Add(new TrashItemEntry(itemId, name, fuzzy));
+            result.Add(new TrashItemEntry(itemId, name, fuzzy)
+            {
+                QuantityThreshold = threshold,
+                HasThreshold = hasThreshold,
+            });
         }
 
         return result;
