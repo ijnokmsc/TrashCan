@@ -10,9 +10,9 @@
     <!-- 程序集名保持 auto_trash_can，与清单 auto_trash_can.json 同名，确保 Dalamud 正确加载 -->
     <RootNamespace>AutoTrash</RootNamespace>
     <AssemblyName>auto_trash_can</AssemblyName>
-    <Version>1.0.0.0</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.0.1.0</Version>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
     <PackageProjectUrl>https://github.com/ijnokmsc/TrashCan</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
 
