@@ -96,7 +96,9 @@ public class SpecialItemProtectionTests
             Log = new LogStore(Cfg);
             TrashList = new TrashListStore(Cfg);
             Executor = new FakeDiscardExecutor();
-            Svc = new AutoDiscardService(Cfg, Executor, Log, Client, Framework, TrashList, resolver);
+            // Unreadable=true：模拟容器瞬时不可访问，触发 ResolveCurrentSlot 回退到扫描时记录的原始槽位，
+            // 从而走真实 Discard 路径（DiscardCallCount==1），保住本文件既有的丢弃回归测试。
+            Svc = new AutoDiscardService(Cfg, Executor, Log, Client, Framework, TrashList, resolver, new FakeGameInventory { Unreadable = true });
         }
 
         /// <summary>入队一件位于 Inventory1、非 HQ 的物品，并驱动一帧 Process。</summary>

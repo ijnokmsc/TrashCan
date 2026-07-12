@@ -4,6 +4,8 @@ using System.Threading.Tasks;
 using Dalamud.Game;
 using Dalamud.Game.ClientState;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Game.Inventory;
+using Dalamud.Game.Inventory.InventoryEventArgTypes;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 
@@ -79,4 +81,48 @@ public sealed class FakeFramework : IFramework
     public Task<T> RunOnTick<T>(Func<T> func, TimeSpan delay, int delayTicks, CancellationToken cancellationToken) => Task.FromResult(func());
     public Task RunOnTick(Func<Task> func, TimeSpan delay, int delayTicks, CancellationToken cancellationToken) => func();
     public Task<T> RunOnTick<T>(Func<Task<T>> func, TimeSpan delay, int delayTicks, CancellationToken cancellationToken) => func();
+}
+
+/// <summary>
+/// IGameInventory 的最小化测试替身。
+/// <list type="bullet">
+///   <item><description>默认（Unreadable=false）：GetInventoryItems 返回空库存。单元测试不依赖实时背包槽位重定位，
+///     用于覆盖“容器可读但目标已不在 -> 安全跳过”的分支，避免误丢旧槽位上的未授权物品（Bug 2 修复）。</description></item>
+///   <item><description>Unreadable=true：GetInventoryItems 抛出 InvalidOperationException，模拟容器瞬时不可访问。
+///     用于覆盖“容器不可读 -> 回退到扫描时记录的原始槽位继续丢弃”的分支，
+///     保证既有 4 个触发真实 Discard 调用的回归测试在修复后仍可绿。</description></item>
+/// </list>
+/// 其余事件均作空实现（测试不依赖它们）。
+/// 注：GameInventoryItem 的读取器走 native vtable，且为 readonly struct（属性全只读、仅无参构造），
+/// 无法在无游戏进程的测试环境中伪造出可命中的实例，故无 Seed 逻辑；重定位（物品移位）覆盖率受此限制，见最终说明。
+/// </summary>
+public sealed class FakeGameInventory : IGameInventory
+{
+    /// <summary>模拟容器瞬时不可访问：为 true 时 GetInventoryItems 抛异常，触发回退到扫描时记录的原始槽位。</summary>
+    public bool Unreadable { get; set; }
+
+    public ReadOnlySpan<GameInventoryItem> GetInventoryItems(GameInventoryType type)
+    {
+        if (Unreadable)
+        {
+            throw new InvalidOperationException("simulated unreadable container");
+        }
+
+        return default; // 空库存（物品不可伪造）
+    }
+
+    public event IGameInventory.InventoryChangelogDelegate InventoryChanged;
+    public event IGameInventory.InventoryChangelogDelegate InventoryChangedRaw;
+    public event IGameInventory.InventoryChangedDelegate ItemAdded;
+    public event IGameInventory.InventoryChangedDelegate ItemRemoved;
+    public event IGameInventory.InventoryChangedDelegate ItemChanged;
+    public event IGameInventory.InventoryChangedDelegate ItemMoved;
+    public event IGameInventory.InventoryChangedDelegate ItemSplit;
+    public event IGameInventory.InventoryChangedDelegate ItemMerged;
+    public event IGameInventory.InventoryChangedDelegate<InventoryItemAddedArgs> ItemAddedExplicit;
+    public event IGameInventory.InventoryChangedDelegate<InventoryItemRemovedArgs> ItemRemovedExplicit;
+    public event IGameInventory.InventoryChangedDelegate<InventoryItemChangedArgs> ItemChangedExplicit;
+    public event IGameInventory.InventoryChangedDelegate<InventoryItemMovedArgs> ItemMovedExplicit;
+    public event IGameInventory.InventoryChangedDelegate<InventoryItemSplitArgs> ItemSplitExplicit;
+    public event IGameInventory.InventoryChangedDelegate<InventoryItemMergedArgs> ItemMergedExplicit;
 }

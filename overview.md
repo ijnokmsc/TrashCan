@@ -15,9 +15,24 @@
 12. **首次打开警告弹窗**：`Configuration.HasShownWarning` 持久化标记，主窗口第一次打开时弹模态警告「删除后无法找回，谨慎添加」，确认后不再弹。
 13. **打开插件暂停自动删除**：主窗口打开期间 `AutoDiscardService.Paused = true`，停止所有自动/定时/扫描丢弃；关闭窗口瞬间先 `Paused = false` 再触发扫描，确保关闭后才执行丢弃。
 
+## 五 Bug 修复轮（2026-07-12）
+1. **Bug 1 丢弃失效**：原 `Paused=false` 复位写在 `MainWindow.Draw()` 的关闭检测分支，但 Dalamud `WindowSystem` 对已关闭窗口不调用 `Draw()`，导致点 X 后 `Paused` 永久卡 `true`、自动丢弃全失效。改为 `OnOpen()` 置 `Paused=true`、`OnClose()` 置 `Paused=false` + `TriggerScanOnClose()`，从 `Draw()` 移除脆弱的关闭检测。
+2. **Bug 2 两无堆叠只丢一个**：`PendingDiscard` 记录的槽位在丢一件后背包压缩而失效。新增 `ResolveCurrentSlot(container, itemId, isHq, fallbackSlot)`，丢弃前按 ItemId+IsHq 重新定位真实槽位；安全回退：容器可读但目标已不在 → 跳过（下次扫描自愈，防误丢）；容器读取异常 → 回退原槽位。
+3. **Bug 3 标题无版本**：主窗口标题改为 `AutoTrash 自动丢弃垃圾桶 v{Major}.{Minor}.{Build}`（参考 CraftFlow `GetVersionString()`）。
+4. **Bug 4 README 不准确**：整体重写为准确功能/运行环境/编译/安装/命令说明。
+5. **Bug 5 DalamudPlugins README 未更新**：插件列表表追加 AutoTrash 行（1.0.0.0），插件源码段追加链接。
+
+## 公开发布
+- 公共仓库：https://github.com/ijnokmsc/TrashCan
+- 首次 Release：https://github.com/ijnokmsc/TrashCan/releases/tag/v1.0.0
+- 自定义插件源：https://github.com/ijnokmsc/DalamudPlugins (pluginmaster.json 已追加 AutoTrash 条目)
+- 图标文件：DalamudPlugins/icons/trashcan.png
+- 版本：1.0.0.0，DalamudApiLevel 15
+- 下载链路实测：200 OK
+
 ## 验证结果
 - 构建：`dotnet build` 0 错误 / 0 警告
-- 测试：`dotnet test` 82 / 82 通过
+- 测试：`dotnet test` 83 / 83 通过（Bug 2 安全回退新增 1 项回归）
 
 ## 涉及文件
 - `Core/Constants.cs`

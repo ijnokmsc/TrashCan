@@ -53,7 +53,7 @@ public class ListGateTests
         public FakeDiscardExecutor Executor { get; }
         public AutoDiscardService Svc { get; }
 
-        public Harness()
+        public Harness(bool unreadable = true)
         {
             Client = new FakeClientState { IsLoggedIn = true };
             Log = new LogStore(Cfg);
@@ -61,7 +61,10 @@ public class ListGateTests
             Executor = new FakeDiscardExecutor();
             // ItemResolver 传 null 作为 IDataManager：GetName 内部 try/catch 安全降级返回 ItemId 字符串，
             // 不影响精确 ItemId 匹配（Contains 对非模糊条目按 ItemId 精确比较）。
-            Svc = new AutoDiscardService(Cfg, Executor, Log, Client, Framework, TrashList, new ItemResolver(null));
+            // 默认 Unreadable=true：模拟容器瞬时不可访问，触发 ResolveCurrentSlot 回退到扫描时记录的原始槽位，
+            // 从而走真实 Discard 路径（DiscardCallCount==1），保住本文件既有的丢弃回归测试。
+            // 传 unreadable:false 可覆盖“容器可读但目标物品已不在 -> 安全跳过”的新分支（Bug 2 修复）。
+            Svc = new AutoDiscardService(Cfg, Executor, Log, Client, Framework, TrashList, new ItemResolver(null), new FakeGameInventory { Unreadable = unreadable });
         }
 
         public void Run(PendingDiscard pd)
@@ -109,6 +112,30 @@ public class ListGateTests
 
         // 且应记录一条成功日志（原生返回 0 视为成功）
         Assert.Contains(h.Log.Entries, e => e.Success && e.ItemId == 12345);
+    }
+
+    /// <summary>
+    /// Bug 2 安全回退回归（核心）：列表命中、非 HQ、容器可读（FakeGameInventory 默认返回空库存），
+    /// 但实时容器内已找不到该 ItemId+IsHq 的匹配物品（例如背包已压缩、物品已移走/上轮已丢）。
+    /// 断言：Process 安全跳过，绝不按扫描时记录的旧槽位调用 Discard（避免误丢未授权物品）。
+    /// 这直接锁定“容器可读但目标已不在 -> 返回 -1 -> 跳过”的新分支。
+    /// 注：受 GameInventoryItem 为 readonly struct（属性全只读）所限，无法在单测中伪造带真实 ItemId
+    /// 的实例，故用“空库存”等价模拟“目标已不在”，覆盖安全跳过语义。
+    /// </summary>
+    [Fact]
+    public void ContainerReadable_ItemGone_SafeSkipped_NotDiscarded()
+    {
+        // unreadable:false -> 容器可读，GetInventoryItems 返回空库存，目标物品不在容器内
+        var h = new Harness(unreadable: false);
+        h.TrashList.Add(new TrashItemEntry { ItemId = 12345, DisplayName = string.Empty, IsFuzzy = false });
+        h.Run(new PendingDiscard { Container = (int)InventoryType.Inventory1, Slot = 0, ItemId = 12345, Quantity = 1, IsHq = false });
+
+        // Bug 2 修复点：目标已不在容器，安全跳过，不按旧槽位误丢未授权物品
+        Assert.Equal(0, h.Executor.DiscardCallCount);
+        Assert.Equal(0, h.Executor.SplitCallCount);
+
+        // 跳过情况不记录任何日志
+        Assert.Empty(h.Log.Entries);
     }
 
     /// <summary>

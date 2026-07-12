@@ -72,7 +72,7 @@ public class MainWindow : Window
         string Tooltip,
         bool ShowQuantity);
 
-    public MainWindow(Plugin plugin) : base("AutoTrash 自动丢弃垃圾桶")
+    public MainWindow(Plugin plugin) : base($"AutoTrash 自动丢弃垃圾桶 {GetVersionString()}")
     {
         this.plugin = plugin;
         this.resolver = plugin.ItemResolver;
@@ -81,6 +81,39 @@ public class MainWindow : Window
         this.config = plugin.Configuration;
         Size = new Vector2(520, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
+    }
+
+    /// <summary>窗口打开时由基类调用：暂停自动丢弃，防止用户在编辑/添加列表物品期间被立即删除。</summary>
+    public override void OnOpen()
+    {
+        // 打开插件时暂停自动删除，防止编辑/添加列表期间误丢
+        plugin.AutoDiscardService.Paused = true;
+        base.OnOpen();
+    }
+
+    /// <summary>窗口关闭时由基类调用：恢复自动丢弃并执行一次扫描删除。
+    /// 注：Dalamud 的 WindowSystem 只对打开的窗口调用 Draw()，真正关闭后 Draw 不再被调用，
+    /// 因此关闭时的恢复逻辑必须放在 OnClose() 而非 Draw() 内。</summary>
+    public override void OnClose()
+    {
+        // 关闭窗口后恢复自动删除，并执行一次扫描删除
+        plugin.AutoDiscardService.Paused = false;
+        TriggerScanOnClose();
+        base.OnClose();
+    }
+
+    /// <summary>读取插件程序集版本，格式 v{Major}.{Minor}.{Build}（参考 CraftFlow 约定）。</summary>
+    private static string GetVersionString()
+    {
+        try
+        {
+            var ver = typeof(AutoTrash.Plugin).Assembly.GetName().Version;
+            return $"v{ver?.Major}.{ver?.Minor}.{ver?.Build}";
+        }
+        catch
+        {
+            return "v?.?.?";
+        }
     }
 
     /// <summary>获取物品图标共享纹理句柄（带缓存）。返回 ISharedImmediateTexture（同步可取，不会为 null），由调用方按需取已加载纹理。ItemId 无效或图标不可用返回 null。</summary>
@@ -259,24 +292,13 @@ public class MainWindow : Window
         var open = IsOpen;
         if (!ImGui.Begin(WindowName, ref open))
         {
-            // 窗口被关闭（点击 X）：关闭时执行一次扫描（仅把候选入队，由扫描逻辑决定是否真正丢弃）。
-            // 使用 IsOpen && !open 仅在“打开→关闭”的瞬间触发一次，避免重复。
-            if (IsOpen && !open)
-            {
-                // 先恢复自动丢弃（关闭主窗口后扫描才能正常执行丢弃），再触发关闭时扫描
-                plugin.AutoDiscardService.Paused = false;
-                TriggerScanOnClose();
-            }
-
-            IsOpen = open;
+            // 关闭逻辑已移至 OnClose()（基类在窗口真正关闭时调用，Draw 不再被调用）。
+            // 此处仅在 Begin 失败时不绘制 UI。
             ImGui.End();
             return;
         }
 
         IsOpen = open;
-
-        // 窗口打开期间暂停自动丢弃：防止用户编辑/添加列表物品时被立即删除，关闭后由关闭分支恢复。
-        plugin.AutoDiscardService.Paused = true;
 
         // 首次使用警告：仅第一次打开主窗口时弹出一次（用配置持久化标记）。
         if (!config.HasShownWarning)

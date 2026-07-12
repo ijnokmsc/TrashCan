@@ -51,7 +51,7 @@ public class QuantityStrategyTests
             // 真实 DiscardExecutor：本测试只走“跳过分支”，不会真正调用原生 InventoryManager。
             // 列表闸门修复后构造函数扩为 7 参，需传入 TrashListStore 与 ItemResolver
             // （IDataManager 传 null，GetName 内部 try/catch 安全降级返回 ItemId 字符串，不影响精确匹配）。
-            Svc = new AutoDiscardService(Cfg, new DiscardExecutor(), Log, Client, Framework, TrashList, new ItemResolver(null));
+            Svc = new AutoDiscardService(Cfg, new DiscardExecutor(), Log, Client, Framework, TrashList, new ItemResolver(null), new FakeGameInventory());
         }
 
         public void Run(PendingDiscard pd)

@@ -58,7 +58,7 @@ public sealed class Plugin : IDalamudPlugin, IDisposable
         LogStore = new LogStore(Configuration);
         ItemResolver = new ItemResolver(DataManager);
         DiscardExecutor = new DiscardExecutor();
-        AutoDiscardService = new AutoDiscardService(Configuration, DiscardExecutor, LogStore, ClientState, Framework, TrashListStore, ItemResolver);
+        AutoDiscardService = new AutoDiscardService(Configuration, DiscardExecutor, LogStore, ClientState, Framework, TrashListStore, ItemResolver, GameInventory);
         InventoryWatcher = new InventoryWatcher(GameInventory, Framework, ClientState, Configuration, TrashListStore, ItemResolver);
         MainWindow = new MainWindow(this);
         Commands = new Commands(this);

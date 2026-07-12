@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Dalamud.Plugin.Services;
+using Dalamud.Game.Inventory;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using AutoTrash.Core;
 using AutoTrash.Models;
@@ -40,6 +41,7 @@ public class AutoDiscardService : IDisposable
     private readonly IFramework framework;
     private readonly TrashListStore trashListStore;
     private readonly ItemResolver itemResolver;
+    private readonly IGameInventory gameInventory;
 
     private readonly Queue<PendingDiscard> pending = new();
     private readonly object lockObj = new();
@@ -49,7 +51,7 @@ public class AutoDiscardService : IDisposable
     /// <summary>暂停标记：主窗口打开期间置 true，停止执行任何自动/定时/扫描丢弃；关闭后恢复为 false。</summary>
     public bool Paused { get; set; } = false;
 
-    public AutoDiscardService(Configuration config, DiscardExecutor executor, LogStore logStore, IClientState clientState, IFramework framework, TrashListStore trashListStore, ItemResolver itemResolver)
+    public AutoDiscardService(Configuration config, DiscardExecutor executor, LogStore logStore, IClientState clientState, IFramework framework, TrashListStore trashListStore, ItemResolver itemResolver, IGameInventory gameInventory)
     {
         this.config = config;
         this.executor = executor;
@@ -58,6 +60,7 @@ public class AutoDiscardService : IDisposable
         this.framework = framework;
         this.trashListStore = trashListStore;
         this.itemResolver = itemResolver;
+        this.gameInventory = gameInventory;
         framework.Update += OnFrameworkUpdate;
     }
 
@@ -155,17 +158,30 @@ public class AutoDiscardService : IDisposable
             return;
         }
 
+        // 重新定位目标物品当前槽位（丢弃后背包压缩会让原槽位失效）。
+        // 安全回退策略：
+        //   容器可读但目标已不在该容器 -> 返回 -1，视为已移走/上轮已丢，安全跳过，
+        //        避免误丢旧槽位上已被压缩后占据的未授权物品（Bug 2 的核心隐患）。
+        //   容器瞬时不可访问（读取抛异常）-> 无法验证，回退到扫描时记录的原始槽位
+        //        (fallbackSlot = item.Slot) 继续丢弃，沿用旧口径、不冒险跳过。
+        var discardSlot = ResolveCurrentSlot(container, item.ItemId, item.IsHq, item.Slot);
+        if (discardSlot < 0)
+        {
+            // 物品已不在容器：跳过，交由下次扫描自愈，避免误丢未授权物品。
+            return;
+        }
+
         int discardResult;
         switch (config.Mode)
         {
             case QuantityMode.DiscardAll:
-                discardResult = executor.Discard(container, item.Slot);
+                discardResult = executor.Discard(container, (ushort)discardSlot);
                 break;
 
             case QuantityMode.DiscardAboveThreshold:
                 if (item.Quantity > config.QuantityThreshold)
                 {
-                    discardResult = executor.Discard(container, item.Slot);
+                    discardResult = executor.Discard(container, (ushort)discardSlot);
                 }
                 else
                 {
@@ -178,7 +194,7 @@ public class AutoDiscardService : IDisposable
                 if (item.Quantity > config.QuantityThreshold)
                 {
                     var excess = item.Quantity - config.QuantityThreshold;
-                    discardResult = executor.SplitAndDiscard(container, item.Slot, excess);
+                    discardResult = executor.SplitAndDiscard(container, (ushort)discardSlot, excess);
                 }
                 else
                 {
@@ -188,7 +204,7 @@ public class AutoDiscardService : IDisposable
                 break;
 
             default:
-                discardResult = executor.Discard(container, item.Slot);
+                discardResult = executor.Discard(container, (ushort)discardSlot);
                 break;
         }
 
@@ -204,6 +220,42 @@ public class AutoDiscardService : IDisposable
                 item.Container,
                 true,
                 $"丢弃 {itemName} x{item.Quantity}"));
+        }
+    }
+
+    /// <summary>重新定位目标物品在当前容器内的真实槽位。背包每次丢弃后会自动压缩，
+    /// 扫描时记录的槽位可能已失效；这里按 ItemId + IsHq 重新查找，确保丢弃的是正确物品。</summary>
+    /// <param name="container">原生 InventoryType。</param>
+    /// <param name="itemId">目标物品 ItemId。</param>
+    /// <param name="isHq">是否 HQ。</param>
+    /// <param name="fallbackSlot">扫描时记录的原始槽位；容器瞬时不可访问时回退使用，不冒险跳过。</param>
+    /// <returns>
+    /// 容器内匹配 ItemId+IsHq 的非空物品槽位；
+    /// 容器可读但遍历完未找到匹配物品 -> -1（物品已不在该容器，交由调用方安全跳过）；
+    /// 容器读取过程抛异常（瞬时不可访问）-> fallbackSlot（无法验证，沿用旧口径继续丢弃）。
+    /// </returns>
+    private int ResolveCurrentSlot(InventoryType container, uint itemId, bool isHq, int fallbackSlot)
+    {
+        try
+        {
+            var items = gameInventory.GetInventoryItems((GameInventoryType)(int)container);
+            foreach (var it in items)
+            {
+                if (!it.IsEmpty && it.ItemId == itemId && it.IsHq == isHq)
+                {
+                    return (int)it.InventorySlot;
+                }
+            }
+
+            // 容器可读，但目标物品已不在该容器：返回 -1 交由调用方安全跳过，
+            // 避免误丢旧槽位上压缩后占据的未授权物品（Bug 2 核心隐患）。
+            return -1;
+        }
+        catch
+        {
+            // 容器瞬时不可访问（读取过程抛异常）：无法验证，回退到扫描时记录的原始槽位，
+            // 不冒险跳过，沿用旧口径。
+            return fallbackSlot;
         }
     }
 
