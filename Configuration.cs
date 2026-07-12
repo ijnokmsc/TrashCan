@@ -30,6 +30,13 @@ public class Configuration : IPluginConfiguration
     /// <summary>细分开关：是否允许丢弃装备（默认 false，即不允许）。仅当 ProtectSpecialItems 关闭或本开关开启时，装备才照常处理。</summary>
     public bool AllowDiscardEquip { get; set; } = false;
 
+    /// <summary>
+    /// 是否在背包原生界面注入垃圾桶按钮（默认开）。
+    /// 与 Enabled 解耦：无论是否启用自动丢弃，点击按钮都打开主窗口（等同 /atrash）。
+    /// 设为 false 可彻底隐藏该原生按钮。
+    /// </summary>
+    public bool ShowInventoryButton { get; set; } = true;
+
     /// <summary>数量策略。</summary>
     public QuantityMode Mode { get; set; } = QuantityMode.DiscardAll;
 
